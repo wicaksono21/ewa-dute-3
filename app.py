@@ -144,7 +144,7 @@ class EWA:
             })            
             max_tokens = 1000
         else:            
-            max_tokens = 200
+            max_tokens = 400
 
         # Add conversation history
         if 'messages' in st.session_state:
