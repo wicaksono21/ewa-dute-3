@@ -72,21 +72,21 @@ REVIEW_INSTRUCTIONS = """As you review the essay, please follow these steps and 
 **Total Score: [X/100]**
 
 # Assessment Areas:
-1. **Understanding & Analysis ([X]/40):** [Brief 1-2 sentence summary of performance in this area]
+1. **Understanding & Analysis ([X]/40):** [Detailed 1-2 sentence summary of performance in this area]
    - **Strength:** [Specific example with quote from essay]
    - **Suggestions for Improvement:**
      1. [First specific, actionable suggestion with example]
      2. [Second specific, actionable suggestion with example]
      3. [Third specific, actionable suggestion with example]
 
-2. **Research Approach ([X]/40):** [Brief 1-2 sentence summary of performance in this area]
+2. **Research Approach ([X]/40):** [Detailed 1-2 sentence summary of performance in this area]
    - **Strength:** [Specific example with quote from essay]
    - **Suggestions for Improvement:**
      1. [First specific, actionable suggestion with example]
      2. [Second specific, actionable suggestion with example]
      3. [Third specific, actionable suggestion with example]
 
-3. **Structure & Presentation ([X]/20):** [Brief 1-2 sentence summary of performance in this area]
+3. **Structure & Presentation ([X]/20):** [Detailed 1-2 sentence summary of performance in this area]
    - **Strength:** [Specific example with quote from essay]
    - **Suggestions for Improvement:**
      1. [First specific, actionable suggestion with example]
