@@ -1,2 +1,2 @@
-# ewa-dute-2
-essay writing assistant-summary for DUTE 2nd version - summary level
+# ewa-dute-3
+essay writing assistant-summary for DUTE 3rd version - detailed level
