@@ -7,8 +7,8 @@ import pytz
 import requests
 
 # Import configurations
-from stageprompts import INITIAL_ASSISTANT_MESSAGE
-from reviewinstructions import SYSTEM_INSTRUCTIONS, REVIEW_INSTRUCTIONS, DISCLAIMER
+from initial import INITIAL_ASSISTANT_MESSAGE
+from reviewprocess import SYSTEM_INSTRUCTIONS, REVIEW_INSTRUCTIONS, DISCLAIMER
 
 # Initialize Firebase
 if not firebase_admin._apps:
@@ -26,7 +26,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-class EWA:
+class EWA3:
     def __init__(self):        
         self.tz = pytz.timezone("Europe/London")
         self.conversations_per_page = 10  # Number of conversations per page
@@ -262,7 +262,7 @@ class EWA:
             return False
         
 def main():
-    app = EWA()
+    app = EWA3()
 
     # Login page
     if not st.session_state.get('logged_in', False):
