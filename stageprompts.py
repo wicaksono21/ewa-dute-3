@@ -7,7 +7,7 @@ INITIAL_ASSISTANT_MESSAGE = {
 1. **Topic Selection**
 2. **Outlining**
 3. **Drafting**
-4. **Reviewing**
+
 
 For your Part B Essay, you have two options:
 
