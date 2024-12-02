@@ -142,7 +142,7 @@ class EWA:
                 "role": "system",
                 "content": REVIEW_INSTRUCTIONS            
             })            
-            max_tokens = 1000
+            max_tokens = 5000
         else:            
             max_tokens = 400
 
