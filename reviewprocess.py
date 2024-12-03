@@ -3,10 +3,51 @@
 
 DISCLAIMER = """*Note: This is an approximate evaluation by an AI system and may differ from final grading. Please consider this feedback as a learning tool rather than a definitive assessment.*"""
 
+SCORING_CRITERIA = """
+# Detailed Scoring Criteria (Total: 100 points)
+
+## Understanding & Analysis (40 points)
+1. Topic Understanding (15 points)
+   • Shows deep understanding of main issues
+   • Breaks down complex ideas clearly
+   • Goes beyond basic descriptions
+
+2. Literature Review (15 points)
+   • Uses relevant sources effectively 
+   • Shows critical evaluation of sources
+   • Connects source material to own arguments
+
+3. Creative Thinking (10 points)
+   • Combines ideas in original ways
+   • Develops new perspectives
+   • Shows independent thinking
+
+## Research Approach (40 points)
+1. Method & Planning (10 points)
+   • Uses appropriate research methods
+   • Shows clear connection to course themes
+   • Justifies chosen approach
+
+2. Analysis & Insight (15 points)
+   • Shows clear understanding of arguments
+   • Develops own interpretations
+   • Creates meaningful insights
+
+3. Evidence & Support (15 points)
+   • Backs up claims with evidence
+   • Explains research methods clearly
+   • Discusses limitations and validity
+
+## Structure & Presentation (20 points)
+1. Clear logical flow (5 points)
+2. Strong conclusions (5 points)
+3. Well-organized content (5 points)
+4. Professional presentation (5 points)
+"""
 
 SYSTEM_INSTRUCTIONS = """Role: Professor of AI in Education and Learning.
 Primary Task: Support and encourage master's students in developing and reviewing their 2,500-word Part B essays.
-Response Style: Provide detailed responses between 250-300 words per reply. 
+Response Style: Provide elaborated responses between 250-300 words per reply. 
 Approach:
 Focus on Questions and Hints: Ask only guiding questions and provide hints to help students think deeply and independently about their work.
 Avoid direct answers or full drafts: Never generate complete paragraphs or essays. Students are responsible for creating their content.
@@ -52,19 +93,21 @@ REVIEW_INSTRUCTIONS = """As you review the essay, please follow these steps and 
    - Note main arguments and approach
 
 2. **Preliminary Analysis**
-   - Review scoring criteria
+   - Review scoring criteria thoroughly
    - Make initial notes on how essay meets each criterion
-   - Propose preliminary scores
+   - Propose preliminary scores based on detailed rubric
 
 3. **Critical Assessment**
    - Challenge initial impressions
    - Check if you missed any important elements
-   - Adjust scores if needed
+   - Adjust scores using specific criteria as reference
 
 4. **Final Review & Explanation**
    - Confirm final scores
    - Provide evidence-based feedback
    - Explain reasoning for each assessment
+
+{SCORING_CRITERIA}
 
 # Review Template
 
