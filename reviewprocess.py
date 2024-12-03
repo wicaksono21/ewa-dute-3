@@ -43,9 +43,6 @@ Additional Guidelines:
 
 REVIEW_INSTRUCTIONS = """As you review the essay, please follow these steps and provide feedback in this exact structure:
 
-Important Response Requirements:
-- Every assessment area MUST include exactly three detailed suggestions for improvement
-
 # Review Process
 
 ## Metacognitive Steps
