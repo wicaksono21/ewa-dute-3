@@ -64,7 +64,7 @@ Instructions:
     • For Critique: Help select appropriate technology and value framework
     
 2. Initial Outline Development:
-    • Confirm understanding of essay requirements
+    • Request the student's outline ideas using guiding questions.
     • Guide structure development
     • Help identify key arguments and evidence needs
 
