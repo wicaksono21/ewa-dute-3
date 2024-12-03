@@ -1,233 +1,270 @@
 import streamlit as st
+import firebase_admin
 from firebase_admin import credentials, auth, firestore
 from openai import OpenAI
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 import requests
-from functools import lru_cache
-from typing import List, Dict, Any
-import json
 
 # Import configurations
 from initial import INITIAL_ASSISTANT_MESSAGE
 from reviewprocess import SYSTEM_INSTRUCTIONS, REVIEW_INSTRUCTIONS, DISCLAIMER
 
-class EWACache:
-    """Cache manager for Essay Writing Assistant"""
-    def __init__(self, ttl_seconds: int = 300):
-        self.ttl_seconds = ttl_seconds
-        self._cache = {}
-        
-    def get(self, key: str) -> Any:
-        if key in self._cache:
-            data, timestamp = self._cache[key]
-            if datetime.now() - timestamp < timedelta(seconds=self.ttl_seconds):
-                return data
-            del self._cache[key]
-        return None
-        
-    def set(self, key: str, value: Any):
-        self._cache[key] = (value, datetime.now())
-        
-    def clear(self):
-        self._cache.clear()
+# Initialize Firebase
+if not firebase_admin._apps:
+    cred = credentials.Certificate(dict(st.secrets["FIREBASE"]))
+    firebase_admin.initialize_app(cred)
+db = firestore.client()
+
+# Page setup
+st.set_page_config(page_title="DUTE Essay Writing Assistant", layout="wide")
+st.markdown("""
+    <style>
+        .main { max-width: 800px; margin: 0 auto; }
+        .chat-message { padding: 1rem; margin: 0.5rem 0; border-radius: 0.5rem; }
+        #MainMenu, footer { visibility: hidden; }
+    </style>
+""", unsafe_allow_html=True)
 
 class EWA:
-    def __init__(self):
+    def __init__(self):        
         self.tz = pytz.timezone("Europe/London")
-        self.conversations_per_page = 10
-        self.cache = EWACache()
-        self.db = firestore.client()
-        
-        # Initialize OpenAI client once
-        self.openai_client = OpenAI(api_key=st.secrets["default"]["OPENAI_API_KEY"])
-        
-    @lru_cache(maxsize=100)
-    def format_time(self, timestamp_str: str) -> str:
-        """Cache formatted timestamps to avoid repeated processing"""
-        if isinstance(timestamp_str, (datetime, type(firestore.SERVER_TIMESTAMP))):
-            return timestamp_str.strftime("[%Y-%m-%d %H:%M:%S]")
-        dt = datetime.fromisoformat(timestamp_str) if timestamp_str else datetime.now(self.tz)
+        self.conversations_per_page = 10  # Number of conversations per page
+
+
+    def format_time(self, dt=None):
+        """Format datetime with consistent timezone"""
+        if isinstance(dt, (datetime, type(firestore.SERVER_TIMESTAMP))):
+            return dt.strftime("[%Y-%m-%d %H:%M:%S]")
+        dt = dt or datetime.now(self.tz)
         return dt.strftime("[%Y-%m-%d %H:%M:%S]")
 
-    @lru_cache(maxsize=50)
-    def generate_title(self, message_content: str, timestamp_str: str) -> str:
-        """Cache generated titles for repeated messages"""
-        current_time = datetime.fromisoformat(timestamp_str)
+    def generate_title(self, message_content, current_time):
+        """Generate title from date and first 4 words of message"""
         title = current_time.strftime('%b %d, %Y • ') + ' '.join(message_content.split()[:4])
         return title[:50] if len(title) > 50 else title
 
-    def get_conversations(self, user_id: str) -> tuple:
-        """Retrieve conversation history with caching"""
-        cache_key = f"conversations_{user_id}_{st.session_state.get('page', 0)}"
-        cached_data = self.cache.get(cache_key)
-        
-        if cached_data:
-            return cached_data
-            
+    def get_conversations(self, user_id):
+        """Retrieve conversation history from Firestore"""
+        # Get total conversation count
+        count = len(list(db.collection('conversations')
+                        .where('user_id', '==', user_id)
+                        .stream()))
+    
+        # Calculate start position based on current page
         page = st.session_state.get('page', 0)
-        start = page * self.conversations_per_page
-        
-        # Use in-memory counter for performance
-        if not hasattr(self, '_conv_count'):
-            self._conv_count = {}
-        
-        if user_id not in self._conv_count:
-            self._conv_count[user_id] = len(list(self.db.collection('conversations')
-                                         .where('user_id', '==', user_id)
-                                         .stream()))
-        
-        convs = list(self.db.collection('conversations')
-                    .where('user_id', '==', user_id)
-                    .order_by('updated_at', direction=firestore.Query.DESCENDING)
-                    .offset(start)
-                    .limit(self.conversations_per_page)
-                    .stream())
-                    
-        has_more = self._conv_count[user_id] > (start + self.conversations_per_page)
-        result = (convs, has_more)
-        
-        self.cache.set(cache_key, result)
-        return result
+        start = page * 10
+    
+        return db.collection('conversations')\
+                 .where('user_id', '==', user_id)\
+                 .order_by('updated_at', direction=firestore.Query.DESCENDING)\
+                 .offset(start)\
+                 .limit(10)\
+                 .stream(), count > (start + 10)
 
-    def prepare_chat_messages(self, prompt: str, is_review: bool) -> List[Dict[str, str]]:
-        """Prepare messages context with optimized structure"""
-        messages = [{"role": "system", "content": SYSTEM_INSTRUCTIONS}]
+    def render_sidebar(self):
+        """Render sidebar with conversation history"""
+        with st.sidebar:
+            st.title("Essay Writing Assistant")
         
-        if is_review:
-            messages.append({
-                "role": "system",
-                "content": REVIEW_INSTRUCTIONS
-            })
-        
-        if 'messages' in st.session_state:
-            # Only include last N messages for context window optimization
-            messages.extend(st.session_state.messages[-10:])
+            if st.button("New Session"):
+                user = st.session_state.user
+                st.session_state.clear()
+                st.session_state.user = user
+                st.session_state.logged_in = True
+                st.session_state.messages = [
+                    {**INITIAL_ASSISTANT_MESSAGE, "timestamp": self.format_time()}
+                ]
+                st.session_state.page = 0
+                st.rerun()
             
-        messages.append({"role": "user", "content": prompt})
-        return messages
-
-    async def handle_chat_async(self, prompt: str):
-        """Asynchronous chat handling for better performance"""
+            if st.button("Latest Chat History"):
+                st.session_state.page = 0
+                st.rerun()
+            
+            st.divider()
+        
+            # Initialize page if not exists
+            if 'page' not in st.session_state:
+                st.session_state.page = 0
+            
+            # Get conversations and has_more flag
+            convs, has_more = self.get_conversations(st.session_state.user.uid)
+        
+            # Display conversations
+            for conv in convs:
+                conv_data = conv.to_dict()
+                if st.button(f"{conv_data.get('title', 'Untitled')}", key=conv.id):
+                    messages = db.collection('conversations').document(conv.id)\
+                               .collection('messages').order_by('timestamp').stream()
+                    st.session_state.messages = []
+                    for msg in messages:
+                        msg_dict = msg.to_dict()
+                        if 'timestamp' in msg_dict:
+                            msg_dict['timestamp'] = self.format_time(msg_dict['timestamp'])
+                        st.session_state.messages.append(msg_dict)
+                    st.session_state.current_conversation_id = conv.id
+                    st.rerun()
+            
+            # Simple pagination controls
+            cols = st.columns(2)
+            with cols[0]:
+                if st.session_state.page > 0:
+                    if st.button("Previous"):
+                        st.session_state.page -= 1
+                        st.rerun()
+            with cols[1]:
+                if has_more:
+                    if st.button("Next"):
+                        st.session_state.page += 1
+                        st.rerun()
+    
+    def handle_chat(self, prompt):
+        """Process chat messages and manage conversation flow"""
         if not prompt:
             return
 
         current_time = datetime.now(self.tz)
-        time_str = self.format_time(current_time.isoformat())
-        
+        time_str = self.format_time(current_time)
+
+        # Display user message
         st.chat_message("user").write(f"{time_str} {prompt}")
+
+        # Build messages context
+        messages = [{"role": "system", "content": SYSTEM_INSTRUCTIONS}]
         
+        # Check for review/scoring related keywords
         review_keywords = ["review", "assess", "grade", "evaluate", "score", "feedback"]
         is_review = any(keyword in prompt.lower() for keyword in review_keywords)
-        
-        messages = self.prepare_chat_messages(prompt, is_review)
-        max_tokens = 5000 if is_review else 400
+    
+        if is_review:            
+            messages.append({
+                "role": "system",
+                "content": REVIEW_INSTRUCTIONS            
+            })            
+            max_tokens = 5000
+        else:            
+            max_tokens = 400
+
+        # Add conversation history
+        if 'messages' in st.session_state:
+            messages.extend(st.session_state.messages)
+
+        # Add current prompt
+        messages.append({"role": "user", "content": prompt})
 
         try:
-            response = await self.openai_client.chat.completions.acreate(
+            # Get AI response
+            response = OpenAI(api_key=st.secrets["default"]["OPENAI_API_KEY"]).chat.completions.create(
                 model="gpt-4o-mini",
                 messages=messages,
                 temperature=0,
                 max_tokens=max_tokens
             )
-            
+
             assistant_content = response.choices[0].message.content
+            
+            # Add disclaimer for review responses
             if is_review:
                 assistant_content = f"{assistant_content}\n\n{DISCLAIMER}"
                 
             st.chat_message("assistant").write(f"{time_str} {assistant_content}")
+
+            # Update session state
+            if 'messages' not in st.session_state:
+                st.session_state.messages = []
+
+            user_message = {"role": "user", "content": prompt, "timestamp": time_str}
+            assistant_msg = {"role": "assistant", "content": assistant_content, "timestamp": time_str}
             
-            # Update session state and save to database concurrently
-            self.update_conversation_state(prompt, assistant_content, time_str, current_time)
-            
+            st.session_state.messages.extend([user_message, assistant_msg])
+
+            # Save to database
+            conversation_id = st.session_state.get('current_conversation_id')
+            conversation_id = self.save_message(conversation_id, 
+                                             {**user_message, "timestamp": current_time})
+            self.save_message(conversation_id, 
+                            {**assistant_msg, "timestamp": current_time})
+
         except Exception as e:
             st.error(f"Error processing message: {str(e)}")
 
-    def update_conversation_state(self, prompt: str, assistant_content: str, 
-                                time_str: str, current_time: datetime):
-        """Update conversation state and database concurrently"""
-        if 'messages' not in st.session_state:
-            st.session_state.messages = []
+    def save_message(self, conversation_id, message):
+        """Save message to Firestore database"""
+        current_time = datetime.now(self.tz)
+        firestore_time = firestore.SERVER_TIMESTAMP
 
-        user_message = {"role": "user", "content": prompt, "timestamp": time_str}
-        assistant_msg = {"role": "assistant", "content": assistant_content, "timestamp": time_str}
-        
-        st.session_state.messages.extend([user_message, assistant_msg])
-        
-        # Save to database in background
-        conversation_id = st.session_state.get('current_conversation_id')
-        conversation_id = self.save_message(conversation_id, 
-                                         {**user_message, "timestamp": current_time})
-        self.save_message(conversation_id, 
-                        {**assistant_msg, "timestamp": current_time})
-        
-        # Clear relevant caches
-        self.cache.clear()
-        self.format_time.cache_clear()
-        self.generate_title.cache_clear()
-
-    def login(self, email: str, password: str) -> bool:
-        """Optimized login with caching"""
-        cache_key = f"login_{email}"
-        cached_result = self.cache.get(cache_key)
-        if cached_result:
-            return cached_result
-            
         try:
+            if not conversation_id:
+                new_conv_ref = db.collection('conversations').document()
+                conversation_id = new_conv_ref.id
+                
+                if message['role'] == 'user':
+                    title = self.generate_title(message['content'], current_time)
+                    new_conv_ref.set({
+                        'user_id': st.session_state.user.uid,
+                        'created_at': firestore_time,
+                        'updated_at': firestore_time,
+                        'title': title,
+                        'status': 'active'
+                    })
+                    st.session_state.current_conversation_id = conversation_id
+
+            if conversation_id:
+                conv_ref = db.collection('conversations').document(conversation_id)
+                conv_ref.collection('messages').add({
+                    **message,
+                    "timestamp": firestore_time
+                })
+                
+                conv_ref.set({
+                    'updated_at': firestore_time,
+                    'last_message': message['content'][:100]
+                }, merge=True)
+            
+            return conversation_id
+            
+        except Exception as e:
+            st.error(f"Error saving message: {str(e)}")
+            return conversation_id
+
+    def login(self, email, password):
+        """Authenticate user with Firebase Auth REST API"""
+        try:
+            # Firebase Auth REST API endpoint
             auth_url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={st.secrets['default']['apiKey']}"
+        
+            # Request body
             auth_data = {
                 "email": email,
                 "password": password,
                 "returnSecureToken": True
             }
-            
+        
+            # Make authentication request
             response = requests.post(auth_url, json=auth_data)
             if response.status_code != 200:
                 raise Exception("Authentication failed")
-                
+            
+            # Get user details
             user = auth.get_user_by_email(email)
             st.session_state.user = user
-            st.session_state.logged_in = True
+            st.session_state.logged_in = True 
             st.session_state.messages = [{
                 **INITIAL_ASSISTANT_MESSAGE,
-                "timestamp": self.format_time(datetime.now(self.tz).isoformat())
+                "timestamp": self.format_time()
             }]
             st.session_state.stage = 'initial'
-            
-            self.cache.set(cache_key, True)
             return True
-            
+        
         except Exception as e:
             st.error("Login failed")
-            self.cache.set(cache_key, False)
             return False
-
-# Initialize database connection once
-@st.cache_resource
-def init_firebase():
-    if not firebase_admin._apps:
-        cred = credentials.Certificate(dict(st.secrets["FIREBASE"]))
-        firebase_admin.initialize_app(cred)
-    return firestore.client()
-
-# Cache CSS styles
-@st.cache_data
-def load_css():
-    return """
-        <style>
-            .main { max-width: 800px; margin: 0 auto; }
-            .chat-message { padding: 1rem; margin: 0.5rem 0; border-radius: 0.5rem; }
-            #MainMenu, footer { visibility: hidden; }
-        </style>
-    """
-
+        
 def main():
-    st.set_page_config(page_title="DUTE Essay Writing Assistant", layout="wide")
-    st.markdown(load_css(), unsafe_allow_html=True)
-    
-    db = init_firebase()
     app = EWA()
 
+    # Login page
     if not st.session_state.get('logged_in', False):
         st.title("DUTE Essay Writing Assistant")
         with st.form("login"):
@@ -238,15 +275,18 @@ def main():
                     st.rerun()
         return
 
+    # Main chat interface
     st.title("DUTE Essay Writing Assistant")
     app.render_sidebar()
 
+    # Display message history
     if 'messages' in st.session_state:
         for msg in st.session_state.messages:
             st.chat_message(msg["role"]).write(
                 f"{msg.get('timestamp', '')} {msg['content']}"
             )
 
+    # Chat input
     if prompt := st.chat_input("Type your message here..."):
         app.handle_chat(prompt)
 
