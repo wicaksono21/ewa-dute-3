@@ -31,6 +31,18 @@ class EWA3:
         self.tz = pytz.timezone("Europe/London")
         self.conversations_per_page = 10  # Number of conversations per page
 
+    def validate_message(self, message):
+        """Validate message format and ensure required fields exist"""
+        required_fields = ['role', 'content']
+        if not all(field in message for field in required_fields):
+            default_message = {
+                'role': 'assistant',
+                'content': message.get('content', ''),
+                'timestamp': message.get('timestamp', self.format_time())
+            }
+            return {**message, **default_message}
+        return message
+
 
     def format_time(self, dt=None):
         """Format datetime with consistent timezone"""
@@ -146,6 +158,12 @@ class EWA3:
         else:            
             max_tokens = 400
 
+        # Add conversation history - with validation
+        if 'messages' in st.session_state:
+            validated_messages = [self.validate_message(msg) for msg in st.session_state.messages]
+            st.session_state.messages = validated_messages
+            messages.extend(validated_messages)
+        
         # Add conversation history
         if 'messages' in st.session_state:
             messages.extend(st.session_state.messages)
