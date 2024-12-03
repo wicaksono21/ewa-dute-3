@@ -1,4 +1,10 @@
 import streamlit as st
+# Page configuration
+st.set_page_config(
+    page_title="DUTE Essay Writing Assistant",
+    layout="wide",
+    initial_sidebar_state="collapsed"  # Reduces initial load time
+)
 import firebase_admin
 from firebase_admin import credentials, auth, firestore
 from openai import OpenAI
@@ -21,13 +27,6 @@ def get_firebase_client():
 
 # Initialize Firebase with caching
 db = get_firebase_client()
-
-# Page configuration
-st.set_page_config(
-    page_title="DUTE Essay Writing Assistant",
-    layout="wide",
-    initial_sidebar_state="collapsed"  # Reduces initial load time
-)
 
 # Cached styles
 st.markdown(
