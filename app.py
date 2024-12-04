@@ -209,17 +209,16 @@ class EWA:
             st.error(f"Error processing message: {str(e)}")
             return False
 
-    
     def save_message(self, conversation_id, message):
-        """Save message and update title with summary"""
+        """Save message and update conversation metadata with optimized title generation"""
         current_time = datetime.now(self.tz)
-
+    
         try:
             # For new conversation
             if not conversation_id:
-                new_conv_ref = db.collection('conversations').document()
-                conversation_id = new_conv_ref.id
-                new_conv_ref.set({
+                conv_ref = db.collection('conversations').document()
+                conversation_id = conv_ref.id
+                conv_ref.set({
                     'user_id': st.session_state.user.uid,
                     'created_at': firestore.SERVER_TIMESTAMP,
                     'updated_at': firestore.SERVER_TIMESTAMP,
@@ -227,24 +226,39 @@ class EWA:
                     'status': 'active'
                 })
                 st.session_state.current_conversation_id = conversation_id
-        
-            # Save message
+                return conversation_id
+
+            # For existing conversation
             conv_ref = db.collection('conversations').document(conversation_id)
-            conv_ref.collection('messages').add({
+        
+            # Use a batch write for atomicity
+            batch = db.batch()
+        
+            # Add message
+            msg_ref = conv_ref.collection('messages').document()
+            batch.set(msg_ref, {
                 **message,
                 "timestamp": firestore.SERVER_TIMESTAMP
             })
 
-            # Get messages for count and context
-            messages = list(conv_ref.collection('messages').get())
-            count = len(messages)
+            # Get count and recent messages efficiently
+            recent_msgs = (
+                conv_ref.collection('messages')
+                .order_by('timestamp', direction=firestore.Query.DESCENDING)
+                .limit(5)
+                .stream()
+            )
         
-            # Get last 5 messages for context
-            recent_messages = [msg.to_dict()['content'] for msg in messages[-5:]]
-            context = " ".join(recent_messages)
+            # Convert to list and get count
+            recent_msgs = list(recent_msgs)
+            context = " ".join(msg.to_dict()['content'] for msg in reversed(recent_msgs))
         
-            # Get summary from GPT
-            summary = OpenAI(api_key=st.secrets["default"]["OPENAI_API_KEY"]).chat.completions.create(
+            # Get count more efficiently
+            count_query = conv_ref.collection('messages').count()
+            count = count_query.get()[0][0]
+        
+            # Generate title using existing OpenAI client
+            summary = self.openai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": "Create a 2-3 word title for this conversation."},
@@ -254,18 +268,21 @@ class EWA:
                 max_tokens=10
             ).choices[0].message.content.strip()
         
-            # Update conversation with summary title and count
-            conv_ref.set({
+            # Update conversation metadata
+            batch.update(conv_ref, {
                 'updated_at': firestore.SERVER_TIMESTAMP,
                 'title': f"{current_time.strftime('%b %d, %Y')} • {summary} [{count}📝]"
-            }, merge=True)
+            })
+        
+            # Commit all changes
+            batch.commit()
         
             return conversation_id
             
         except Exception as e:
             st.error(f"Error: {str(e)}")
             return conversation_id
-        
+    
     def login(self, email, password):
         """Authenticate user with Firebase Auth REST API"""
         try:
