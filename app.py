@@ -307,7 +307,7 @@ class EWA:
             st.session_state.user = user
             st.session_state.logged_in = True 
             st.session_state.messages = [{
-                **INITIAL_ASSISTANT_MESSAGE,
+                "content": INITIAL_ASSISTANT_MESSAGE["content"],
                 "timestamp": self.format_time()
                 "role": "assistant"
             }]
