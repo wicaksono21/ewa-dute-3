@@ -148,6 +148,9 @@ class EWA:
         current_time = datetime.now(self.tz)
         time_str = self.format_time(current_time)
 
+        # Initialize conversation_id at the start
+        conversation_id = st.session_state.get('current_conversation_id')
+        
         # Display user message
         st.chat_message("user").write(f"{time_str} {prompt}")
 
@@ -210,13 +213,17 @@ class EWA:
         
             st.session_state.messages.extend(new_messages)
 
-            # Save user message and get conversation ID
-            conversation_id = self.save_message(conversation_id, db_messages[0])
-            # Save assistant message
-            self.save_message(conversation_id, db_messages[1])
+             # Save to database in order, storing the updated conversation_id
+            conversation_id = self.save_message(conversation_id, 
+                                             {**user_message, "timestamp": current_time})
+            if conversation_id:  # Only save assistant message if we have a valid conversation_id
+                self.save_message(conversation_id, 
+                                {**assistant_msg, "timestamp": current_time})
 
         except Exception as e:
             st.error(f"Error processing message: {str(e)}")
+
+        return conversation_id  # Return the conversation_id in case it's needed
 
     def save_message(self, conversation_id, message):
         """Save message and update title with summary"""
