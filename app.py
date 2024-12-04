@@ -8,7 +8,7 @@ import requests
 
 # Import configurations
 from initial import INITIAL_ASSISTANT_MESSAGE
-from reviewprocess import SYSTEM_INSTRUCTIONS, REVIEW_INSTRUCTIONS, DISCLAIMER, SCORING_CRITERIA
+from reviewiprocess import SYSTEM_INSTRUCTIONS, REVIEW_INSTRUCTIONS, DISCLAIMER, SCORING_CRITERIA
 
 # Initialize Firebase
 if not firebase_admin._apps:
@@ -37,12 +37,7 @@ class EWA:
         if isinstance(dt, (datetime, type(firestore.SERVER_TIMESTAMP))):
             return dt.strftime("[%Y-%m-%d %H:%M:%S]")
         dt = dt or datetime.now(self.tz)
-        return dt.strftime("[%Y-%m-%d %H:%M:%S]")
-
-    def generate_title(self, message_content, current_time):
-        """Generate title from date and first 4 words of message"""
-        title = current_time.strftime('%b %d, %Y • ') + ' '.join(message_content.split()[:4])
-        return title[:50] if len(title) > 50 else title
+        return dt.strftime("[%Y-%m-%d %H:%M:%S]")           
 
     def get_conversations(self, user_id):
         """Retrieve conversation history from Firestore"""
@@ -134,7 +129,7 @@ class EWA:
         messages = [{"role": "system", "content": SYSTEM_INSTRUCTIONS}]
         
         # Check for review/scoring related keywords
-        review_keywords = ["review", "assess", "grade", "evaluate", "score", "feedback"]
+        review_keywords = ["grade", "score", "review", "assess", "evaluate", "feedback", "rubric"]
         is_review = any(keyword in prompt.lower() for keyword in review_keywords)
     
         if is_review:            
@@ -143,12 +138,23 @@ class EWA:
                 "content": REVIEW_INSTRUCTIONS            
             })            
             max_tokens = 5000
+            context_window = 10  # Larger context window for review tasks         
         else:            
             max_tokens = 600
+            context_window = 6   # Smaller context window for regular chat
+
 
         # Add conversation history
         if 'messages' in st.session_state:
-            messages.extend(st.session_state.messages)
+            # Keep only the most recent messages within the context window
+            recent_messages = st.session_state.messages[-context_window:]
+
+            # Ensure we have the initial assistant message
+            if st.session_state.messages and st.session_state.messages[0].get('role') == 'assistant':
+                if recent_messages[0].get('role') != 'assistant':
+                    recent_messages = [st.session_state.messages[0]] + recent_messages[-context_window+1:]
+
+            messages.extend(recent_messages)
 
         # Add current prompt
         messages.append({"role": "user", "content": prompt})
@@ -190,44 +196,61 @@ class EWA:
             st.error(f"Error processing message: {str(e)}")
 
     def save_message(self, conversation_id, message):
-        """Save message to Firestore database"""
+        """Save message and update title with summary"""
         current_time = datetime.now(self.tz)
-        firestore_time = firestore.SERVER_TIMESTAMP
 
         try:
+            # For new conversation
             if not conversation_id:
                 new_conv_ref = db.collection('conversations').document()
                 conversation_id = new_conv_ref.id
-                
-                if message['role'] == 'user':
-                    title = self.generate_title(message['content'], current_time)
-                    new_conv_ref.set({
-                        'user_id': st.session_state.user.uid,
-                        'created_at': firestore_time,
-                        'updated_at': firestore_time,
-                        'title': title,
-                        'status': 'active'
-                    })
-                    st.session_state.current_conversation_id = conversation_id
-
-            if conversation_id:
-                conv_ref = db.collection('conversations').document(conversation_id)
-                conv_ref.collection('messages').add({
-                    **message,
-                    "timestamp": firestore_time
+                new_conv_ref.set({
+                    'user_id': st.session_state.user.uid,
+                    'created_at': firestore.SERVER_TIMESTAMP,
+                    'updated_at': firestore.SERVER_TIMESTAMP,
+                    'title': f"{current_time.strftime('%b %d, %Y')} • New Chat [1📝]",
+                    'status': 'active'
                 })
-                
-                conv_ref.set({
-                    'updated_at': firestore_time,
-                    'last_message': message['content'][:100]
-                }, merge=True)
-            
+                st.session_state.current_conversation_id = conversation_id
+        
+            # Save message
+            conv_ref = db.collection('conversations').document(conversation_id)
+            conv_ref.collection('messages').add({
+                **message,
+                "timestamp": firestore.SERVER_TIMESTAMP
+            })
+
+            # Get messages for count and context
+            messages = list(conv_ref.collection('messages').get())
+            count = len(messages)
+        
+            # Get last 5 messages for context
+            recent_messages = [msg.to_dict()['content'] for msg in messages[-5:]]
+            context = " ".join(recent_messages)
+        
+            # Get summary from GPT
+            summary = OpenAI(api_key=st.secrets["default"]["OPENAI_API_KEY"]).chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "Create a 2-3 word title for this conversation."},
+                    {"role": "user", "content": context}
+                ],
+                temperature=0.3,
+                max_tokens=10
+            ).choices[0].message.content.strip()
+        
+            # Update conversation with summary title and count
+            conv_ref.set({
+                'updated_at': firestore.SERVER_TIMESTAMP,
+                'title': f"{current_time.strftime('%b %d, %Y')} • {summary} [{count}📝]"
+            }, merge=True)
+        
             return conversation_id
             
         except Exception as e:
-            st.error(f"Error saving message: {str(e)}")
+            st.error(f"Error: {str(e)}")
             return conversation_id
-
+        
     def login(self, email, password):
         """Authenticate user with Firebase Auth REST API"""
         try:
