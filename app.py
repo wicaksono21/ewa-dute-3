@@ -27,9 +27,18 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 class EWA:
+    REVIEW_KEYWORDS = {"grade", "score", "review", "assess", "evaluate", "feedback", "rubric"}
+    MAX_TOKENS_REVIEW = 5000
+    MAX_TOKENS_NORMAL = 600
+    CONTEXT_WINDOW_REVIEW = 10
+    CONTEXT_WINDOW_NORMAL = 6
+
+    
     def __init__(self):        
         self.tz = pytz.timezone("Europe/London")
         self.conversations_per_page = 10  # Number of conversations per page
+        # Add OpenAI client initialization
+        self.openai_client = OpenAI(api_key=st.secrets["default"]["OPENAI_API_KEY"])
 
 
     def format_time(self, dt=None):
@@ -114,87 +123,93 @@ class EWA:
                         st.session_state.page += 1
                         st.rerun()
     
+    def get_recent_messages(self, conversation_id, limit):
+        """Get recent messages from a conversation"""
+        if not conversation_id:
+            return []
+        
+        messages = (
+            db.collection('conversations')
+            .document(conversation_id)
+            .collection('messages')
+            .order_by('timestamp', direction=firestore.Query.DESCENDING)
+            .limit(limit)
+            .stream()
+        )
+    
+        return [
+            {
+                'role': msg.to_dict().get('role'),
+                'content': msg.to_dict().get('content')
+            }
+            for msg in messages
+        ]
+    
     def handle_chat(self, prompt):
         """Process chat messages and manage conversation flow"""
         if not prompt:
             return
 
+        # 1. Initial Setup
         current_time = datetime.now(self.tz)
         time_str = self.format_time(current_time)
-
-        # Display user message
         st.chat_message("user").write(f"{time_str} {prompt}")
 
-        # Build messages context
-        messages = [{"role": "system", "content": SYSTEM_INSTRUCTIONS}]
-        
-        # Check for review/scoring related keywords
-        review_keywords = ["grade", "score", "review", "assess", "evaluate", "feedback", "rubric"]
-        is_review = any(keyword in prompt.lower() for keyword in review_keywords)
-    
-        if is_review:            
-            messages.append({
-                "role": "system",
-                "content": REVIEW_INSTRUCTIONS            
-            })            
-            max_tokens = 5000
-            context_window = 10  # Larger context window for review tasks         
-        else:            
-            max_tokens = 600
-            context_window = 6   # Smaller context window for regular chat
-
-
-        # Add conversation history
-        if 'messages' in st.session_state:
-            # Keep only the most recent messages within the context window
-            recent_messages = st.session_state.messages[-context_window:]
-
-            # Ensure we have the initial assistant message
-            if st.session_state.messages and st.session_state.messages[0].get('role') == 'assistant':
-                if recent_messages[0].get('role') != 'assistant':
-                    recent_messages = [st.session_state.messages[0]] + recent_messages[-context_window+1:]
-
-            messages.extend(recent_messages)
-
-        # Add current prompt
-        messages.append({"role": "user", "content": prompt})
+        # 2. Determine Context Type
+        is_review = any(keyword in prompt.lower() for keyword in self.REVIEW_KEYWORDS)
+        max_tokens = self.MAX_TOKENS_REVIEW if is_review else self.MAX_TOKENS_NORMAL
+        context_window = self.CONTEXT_WINDOW_REVIEW if is_review else self.CONTEXT_WINDOW_NORMAL
 
         try:
-            # Get AI response
-            response = OpenAI(api_key=st.secrets["default"]["OPENAI_API_KEY"]).chat.completions.create(
+            # 3. Build Message Context
+            messages = [{"role": "system", "content": SYSTEM_INSTRUCTIONS}]
+            if is_review:
+                messages.append({"role": "system", "content": REVIEW_INSTRUCTIONS})
+
+            # 4. Add Recent Context
+            conv_id = st.session_state.get('current_conversation_id')
+            recent_messages = self.get_recent_messages(conv_id, context_window)
+            messages.extend(reversed(recent_messages))
+            messages.append({"role": "user", "content": prompt})
+
+            # 5. Get AI Response
+            response = self.openai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=messages,
                 temperature=0,
                 max_tokens=max_tokens
             )
 
+            # 6. Process Response
             assistant_content = response.choices[0].message.content
-            
-            # Add disclaimer for review responses
             if is_review:
                 assistant_content = f"{assistant_content}\n\n{DISCLAIMER}"
-                
+            
             st.chat_message("assistant").write(f"{time_str} {assistant_content}")
 
-            # Update session state
+            # 7. Update Session State
             if 'messages' not in st.session_state:
                 st.session_state.messages = []
 
-            user_message = {"role": "user", "content": prompt, "timestamp": time_str}
-            assistant_msg = {"role": "assistant", "content": assistant_content, "timestamp": time_str}
-            
-            st.session_state.messages.extend([user_message, assistant_msg])
+            new_messages = [
+                {"role": "user", "content": prompt, "timestamp": time_str},
+                {"role": "assistant", "content": assistant_content, "timestamp": time_str}
+            ]
+        
+            st.session_state.messages.extend(new_messages)
 
-            # Save to database
-            conversation_id = st.session_state.get('current_conversation_id')
-            conversation_id = self.save_message(conversation_id, 
-                                             {**user_message, "timestamp": current_time})
-            self.save_message(conversation_id, 
-                            {**assistant_msg, "timestamp": current_time})
+            # 8. Save to Database
+            for msg in new_messages:
+                conversation_id = self.save_message(conv_id, 
+                                                 {**msg, "timestamp": current_time})
+        
+            return True
 
         except Exception as e:
             st.error(f"Error processing message: {str(e)}")
+            return False
 
+    
     def save_message(self, conversation_id, message):
         """Save message and update title with summary"""
         current_time = datetime.now(self.tz)
