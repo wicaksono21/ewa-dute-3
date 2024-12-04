@@ -157,36 +157,47 @@ class EWA:
         if not prompt:
             return
 
-        # 1. Initial Setup
         current_time = datetime.now(self.tz)
         time_str = self.format_time(current_time)
+
+        # Display user message
         st.chat_message("user").write(f"{time_str} {prompt}")
 
-        # 2. Determine Context Type
-        is_review = any(keyword in prompt.lower() for keyword in self.REVIEW_KEYWORDS)
-        max_tokens = self.MAX_TOKENS_REVIEW if is_review else self.MAX_TOKENS_NORMAL
-        context_window = self.CONTEXT_WINDOW_REVIEW if is_review else self.CONTEXT_WINDOW_NORMAL
-
         try:
-            # 3. Build Message Context
+            # Build message context
             messages = [{"role": "system", "content": SYSTEM_INSTRUCTIONS}]
-            if is_review:
-                messages.append({"role": "system", "content": REVIEW_INSTRUCTIONS})
+            if 'messages' in st.session_state:
+                # Always include the initial assistant message first
+                initial_message = st.session_state.messages[0]
+                messages.append({
+                    "role": "assistant",
+                    "content": initial_message['content']
+                })
+            
+            # Then add recent context
+            context_window = self.CONTEXT_WINDOW_REVIEW if any(keyword in prompt.lower() for keyword in self.REVIEW_KEYWORDS) else self.CONTEXT_WINDOW_NORMAL
+            
+            # Add recent messages but skip the initial one we already added
+            recent_messages = st.session_state.messages[1:][-context_window:]
+            for msg in recent_messages:
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
 
-            # 4. Add Recent Context
-            conv_id = st.session_state.get('current_conversation_id')
-            recent_messages = self.get_recent_messages(conv_id, context_window)
-            messages.extend(reversed(recent_messages))
-            messages.append({"role": "user", "content": prompt})
+        # Add current prompt
+        messages.append({"role": "user", "content": prompt})
 
-            # 5. Get AI Response
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                temperature=0,
-                max_tokens=max_tokens
-            )
+        # Get AI response with proper context
+        response = self.openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0,
+            max_tokens=self.MAX_TOKENS_REVIEW if any(keyword in prompt.lower() for keyword in self.REVIEW_KEYWORDS) else self.MAX_TOKENS_NORMAL
+        )
 
+        assistant_content = response.choices[0].message.content
+        
             # 6. Process Response
             assistant_content = response.choices[0].message.content
             if is_review:
