@@ -210,7 +210,7 @@ class EWA:
             return False
 
     def save_message(self, conversation_id, message):
-        """Save message and update conversation metadata with optimized title generation"""
+        """Save message and update conversation metadata"""
         current_time = datetime.now(self.tz)
     
         try:
@@ -231,51 +231,50 @@ class EWA:
             # For existing conversation
             conv_ref = db.collection('conversations').document(conversation_id)
         
-            # Use a batch write for atomicity
-            batch = db.batch()
-        
-            # Add message
+            # Add new message
             msg_ref = conv_ref.collection('messages').document()
-            batch.set(msg_ref, {
+            msg_ref.set({
                 **message,
                 "timestamp": firestore.SERVER_TIMESTAMP
             })
 
-            # Get count and recent messages efficiently
-            recent_msgs = (
-                conv_ref.collection('messages')
-                .order_by('timestamp', direction=firestore.Query.DESCENDING)
-                .limit(5)
-                .stream()
-            )
+            # Get messages for count and context
+            messages = list(conv_ref.collection('messages').get())
+            count = len(messages)
         
-            # Convert to list and get count
-            recent_msgs = list(recent_msgs)
-            context = " ".join(msg.to_dict()['content'] for msg in reversed(recent_msgs))
+            # Get last 5 messages for context
+            recent_messages = [msg.to_dict()['content'] for msg in messages[-5:]]
+            context = " ".join(recent_messages)
         
-            # Get count more efficiently
-            count_query = conv_ref.collection('messages').count()
-            count = count_query.get()[0][0]
-        
-            # Generate title using existing OpenAI client
-            summary = self.openai_client.chat.completions.create(
+            try:
+                # Get summary from GPT with error handling
+                summary = self.openai_client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "Create a 2-3 word title for this conversation."},
-                    {"role": "user", "content": context}
-                ],
-                temperature=0.3,
-                max_tokens=10
-            ).choices[0].message.content.strip()
+                    messages=[
+                        {"role": "system", "content": "Create a 2-3 word title for this conversation, using only alphanumeric characters and spaces. Do not include any special characters or formatting."},
+                        {"role": "user", "content": context}
+                    ],
+                    temperature=0.3,
+                    max_tokens=10
+                ).choices[0].message.content.strip()
+            
+                # Clean the summary: remove special characters and XML/HTML tags
+                summary = ''.join(char for char in summary if char.isalnum() or char.isspace())
+                summary = summary.strip()
+            
+                # Fallback if summary is empty after cleaning
+                if not summary:
+                    summary = "Chat Session"
+                
+            except Exception as e:
+                summary = "Chat Session"
+                st.error(f"Error generating title: {str(e)}")
         
-            # Update conversation metadata
-            batch.update(conv_ref, {
+            # Update conversation with summary title and count
+            conv_ref.set({
                 'updated_at': firestore.SERVER_TIMESTAMP,
                 'title': f"{current_time.strftime('%b %d, %Y')} • {summary} [{count}📝]"
-            })
-        
-            # Commit all changes
-            batch.commit()
+            }, merge=True)
         
             return conversation_id
             
