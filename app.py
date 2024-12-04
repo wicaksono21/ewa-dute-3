@@ -31,6 +31,32 @@ class EWA:
         self.tz = pytz.timezone("Europe/London")
         self.conversations_per_page = 10  # Number of conversations per page
 
+        # Add cache properties
+        self._openai_client = None
+        self._system_instructions = None
+        self._review_instructions = None
+
+    @property
+    def openai_client(self):
+        """Lazy initialization of OpenAI client"""
+        if self._openai_client is None:
+            self._openai_client = OpenAI(api_key=st.secrets["default"]["OPENAI_API_KEY"])
+        return self._openai_client
+    
+    @property
+    def system_instructions(self):
+        """Lazy initialization of system instructions"""
+        if self._system_instructions is None:
+            self._system_instructions = {"role": "system", "content": SYSTEM_INSTRUCTIONS}
+        return self._system_instructions
+    
+    @property
+    def review_instructions(self):
+        """Lazy initialization of review instructions"""
+        if self._review_instructions is None:
+            self._review_instructions = {"role": "system", "content": REVIEW_INSTRUCTIONS}
+        return self._review_instructions
+
 
     def format_time(self, dt=None):
         """Format datetime with consistent timezone"""
@@ -125,18 +151,15 @@ class EWA:
         # Display user message
         st.chat_message("user").write(f"{time_str} {prompt}")
 
-        # Build messages context
-        messages = [{"role": "system", "content": SYSTEM_INSTRUCTIONS}]
+        # Use cached system instructions
+        messages = [self.system_instructions]
         
         # Check for review/scoring related keywords
         review_keywords = ["grade", "score", "review", "assess", "evaluate", "feedback", "rubric"]
-        is_review = any(keyword in prompt.lower() for keyword in review_keywords)
+        is_review = bool(review_keywords & set(prompt.lower().split()))
     
         if is_review:            
-            messages.append({
-                "role": "system",
-                "content": REVIEW_INSTRUCTIONS            
-            })            
+            messages.append(self.review_instructions)                                 
             max_tokens = 5000
             context_window = 10  # Larger context window for review tasks         
         else:            
@@ -180,17 +203,17 @@ class EWA:
             if 'messages' not in st.session_state:
                 st.session_state.messages = []
 
-            user_message = {"role": "user", "content": prompt, "timestamp": time_str}
-            assistant_msg = {"role": "assistant", "content": assistant_content, "timestamp": time_str}
-            
-            st.session_state.messages.extend([user_message, assistant_msg])
+            new_messages = [
+                {"role": "user", "content": prompt, "timestamp": time_str},
+                {"role": "assistant", "content": assistant_content, "timestamp": time_str}
+            ]    
+        
+            st.session_state.messages.extend(new_messages)
 
-            # Save to database
-            conversation_id = st.session_state.get('current_conversation_id')
-            conversation_id = self.save_message(conversation_id, 
-                                             {**user_message, "timestamp": current_time})
-            self.save_message(conversation_id, 
-                            {**assistant_msg, "timestamp": current_time})
+            # Save user message and get conversation ID
+            conversation_id = self.save_message(conversation_id, db_messages[0])
+            # Save assistant message
+            self.save_message(conversation_id, db_messages[1])
 
         except Exception as e:
             st.error(f"Error processing message: {str(e)}")
