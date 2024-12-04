@@ -156,7 +156,7 @@ class EWA:
         
         # Check for review/scoring related keywords
         review_keywords = ["grade", "score", "review", "assess", "evaluate", "feedback", "rubric"]
-        is_review = bool(review_keywords & set(prompt.lower().split()))
+        is_review = any(keyword in prompt.lower() for keyword in review_keywords)
         
         if is_review:            
             messages.append(self.review_instructions)                                 
