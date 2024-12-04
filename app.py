@@ -126,7 +126,8 @@ class EWA:
     def get_recent_messages(self, conversation_id, limit):
         """Get recent messages from a conversation"""
         if not conversation_id:
-            return []
+            # If no conversation_id, return initial message
+            return [INITIAL_ASSISTANT_MESSAGE] if 'messages' not in st.session_state else st.session_state.messages
         
         messages = (
             db.collection('conversations')
@@ -137,13 +138,19 @@ class EWA:
             .stream()
         )
     
-        return [
+        msg_list = [
             {
                 'role': msg.to_dict().get('role'),
                 'content': msg.to_dict().get('content')
             }
             for msg in messages
         ]
+    
+        # Ensure initial message is included if this is start of conversation
+        if not msg_list and 'messages' in st.session_state:
+            return [msg for msg in st.session_state.messages if msg['role'] == 'assistant'][:1]
+    
+        return msg_list
     
     def handle_chat(self, prompt):
         """Process chat messages and manage conversation flow"""
@@ -291,6 +298,7 @@ class EWA:
             st.session_state.messages = [{
                 **INITIAL_ASSISTANT_MESSAGE,
                 "timestamp": self.format_time()
+                "role": "assistant"
             }]
             st.session_state.stage = 'initial'
             return True
@@ -320,10 +328,10 @@ def main():
     # Display message history
     if 'messages' in st.session_state:
         for msg in st.session_state.messages:
-            st.chat_message(msg["role"]).write(
-                f"{msg.get('timestamp', '')} {msg['content']}"
-            )
-
+            role = msg.get("role", "assistant")  # Default to assistant if role not set
+            formatted_msg = f"{msg.get('timestamp', '')} {msg['content']}"
+            st.chat_message(role).write(formatted_msg)
+            
     # Chat input
     if prompt := st.chat_input("Type your message here..."):
         app.handle_chat(prompt)
