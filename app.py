@@ -227,13 +227,10 @@ class EWA:
                 })
                 st.session_state.current_conversation_id = conversation_id
                 return conversation_id
-
+        
             # For existing conversation
             conv_ref = db.collection('conversations').document(conversation_id)
-        
-            # Add new message
-            msg_ref = conv_ref.collection('messages').document()
-            msg_ref.set({
+            conv_ref.collection('messages').add({
                 **message,
                 "timestamp": firestore.SERVER_TIMESTAMP
             })
@@ -246,29 +243,16 @@ class EWA:
             recent_messages = [msg.to_dict()['content'] for msg in messages[-5:]]
             context = " ".join(recent_messages)
         
-            try:
-                # Get summary from GPT with error handling
-                summary = self.openai_client.chat.completions.create(
+            # Get summary from GPT
+            summary = OpenAI(api_key=st.secrets["default"]["OPENAI_API_KEY"]).chat.completions.create(
                 model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": "Create a 2-3 word title for this conversation, using only alphanumeric characters and spaces. Do not include any special characters or formatting."},
-                        {"role": "user", "content": context}
-                    ],
-                    temperature=0.3,
-                    max_tokens=10
-                ).choices[0].message.content.strip()
-            
-                # Clean the summary: remove special characters and XML/HTML tags
-                summary = ''.join(char for char in summary if char.isalnum() or char.isspace())
-                summary = summary.strip()
-            
-                # Fallback if summary is empty after cleaning
-                if not summary:
-                    summary = "Chat Session"
-                
-            except Exception as e:
-                summary = "Chat Session"
-                st.error(f"Error generating title: {str(e)}")
+                messages=[
+                    {"role": "system", "content": "Create a 2-3 word title for this conversation."},
+                    {"role": "user", "content": context}
+                ],
+                temperature=0.3,
+                max_tokens=10
+            ).choices[0].message.content.strip()
         
             # Update conversation with summary title and count
             conv_ref.set({
