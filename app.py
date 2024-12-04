@@ -27,18 +27,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 class EWA:
-    REVIEW_KEYWORDS = {"grade", "score", "review", "assess", "evaluate", "feedback", "rubric"}
-    MAX_TOKENS_REVIEW = 5000
-    MAX_TOKENS_NORMAL = 600
-    CONTEXT_WINDOW_REVIEW = 10
-    CONTEXT_WINDOW_NORMAL = 6
-
-    
     def __init__(self):        
         self.tz = pytz.timezone("Europe/London")
         self.conversations_per_page = 10  # Number of conversations per page
-        # Add OpenAI client initialization
-        self.openai_client = OpenAI(api_key=st.secrets["default"]["OPENAI_API_KEY"])
 
 
     def format_time(self, dt=None):
@@ -123,35 +114,6 @@ class EWA:
                         st.session_state.page += 1
                         st.rerun()
     
-    def get_recent_messages(self, conversation_id, limit):
-        """Get recent messages from a conversation"""
-        if not conversation_id:
-            # If no conversation_id, return initial message
-            return [INITIAL_ASSISTANT_MESSAGE] if 'messages' not in st.session_state else st.session_state.messages
-        
-        messages = (
-            db.collection('conversations')
-            .document(conversation_id)
-            .collection('messages')
-            .order_by('timestamp', direction=firestore.Query.DESCENDING)
-            .limit(limit)
-            .stream()
-        )
-    
-        msg_list = [
-            {
-                'role': msg.to_dict().get('role'),
-                'content': msg.to_dict().get('content')
-            }
-            for msg in messages
-        ]
-    
-        # Ensure initial message is included if this is start of conversation
-        if not msg_list and 'messages' in st.session_state:
-            return [msg for msg in st.session_state.messages if msg['role'] == 'assistant'][:1]
-    
-        return msg_list
-    
     def handle_chat(self, prompt):
         """Process chat messages and manage conversation flow"""
         if not prompt:
@@ -163,80 +125,86 @@ class EWA:
         # Display user message
         st.chat_message("user").write(f"{time_str} {prompt}")
 
-        try:
-            # Build message context
-            messages = [{"role": "system", "content": SYSTEM_INSTRUCTIONS}]
-            if 'messages' in st.session_state:
-                # Always include the initial assistant message first
-                initial_message = st.session_state.messages[0]
-                messages.append({
-                    "role": "assistant",
-                    "content": initial_message['content']
-                })
-            
-            # Then add recent context
-            context_window = self.CONTEXT_WINDOW_REVIEW if any(keyword in prompt.lower() for keyword in self.REVIEW_KEYWORDS) else self.CONTEXT_WINDOW_NORMAL
-            
-            # Add recent messages but skip the initial one we already added
-            recent_messages = st.session_state.messages[1:][-context_window:]
-            for msg in recent_messages:
-                messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"]
-                })
+        # Build messages context
+        messages = [{"role": "system", "content": SYSTEM_INSTRUCTIONS}]
+        
+        # Check for review/scoring related keywords
+        review_keywords = ["grade", "score", "review", "assess", "evaluate", "feedback", "rubric"]
+        is_review = any(keyword in prompt.lower() for keyword in review_keywords)
+    
+        if is_review:            
+            messages.append({
+                "role": "system",
+                "content": REVIEW_INSTRUCTIONS            
+            })            
+            max_tokens = 5000
+            context_window = 10  # Larger context window for review tasks         
+        else:            
+            max_tokens = 600
+            context_window = 6   # Smaller context window for regular chat
+
+
+        # Add conversation history
+        if 'messages' in st.session_state:
+            # Keep only the most recent messages within the context window
+            recent_messages = st.session_state.messages[-context_window:]
+
+            # Ensure we have the initial assistant message
+            if st.session_state.messages and st.session_state.messages[0].get('role') == 'assistant':
+                if recent_messages[0].get('role') != 'assistant':
+                    recent_messages = [st.session_state.messages[0]] + recent_messages[-context_window+1:]
+
+            messages.extend(recent_messages)
 
         # Add current prompt
         messages.append({"role": "user", "content": prompt})
 
-        # Get AI response with proper context
-        response = self.openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            temperature=0,
-            max_tokens=self.MAX_TOKENS_REVIEW if any(keyword in prompt.lower() for keyword in self.REVIEW_KEYWORDS) else self.MAX_TOKENS_NORMAL
-        )
+        try:
+            # Get AI response
+            response = OpenAI(api_key=st.secrets["default"]["OPENAI_API_KEY"]).chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=0,
+                max_tokens=max_tokens
+            )
 
-        assistant_content = response.choices[0].message.content
-        
-            # 6. Process Response
             assistant_content = response.choices[0].message.content
+            
+            # Add disclaimer for review responses
             if is_review:
                 assistant_content = f"{assistant_content}\n\n{DISCLAIMER}"
-            
+                
             st.chat_message("assistant").write(f"{time_str} {assistant_content}")
 
-            # 7. Update Session State
+            # Update session state
             if 'messages' not in st.session_state:
                 st.session_state.messages = []
 
-            new_messages = [
-                {"role": "user", "content": prompt, "timestamp": time_str},
-                {"role": "assistant", "content": assistant_content, "timestamp": time_str}
-            ]
-        
-            st.session_state.messages.extend(new_messages)
+            user_message = {"role": "user", "content": prompt, "timestamp": time_str}
+            assistant_msg = {"role": "assistant", "content": assistant_content, "timestamp": time_str}
+            
+            st.session_state.messages.extend([user_message, assistant_msg])
 
-            # 8. Save to Database
-            for msg in new_messages:
-                conversation_id = self.save_message(conv_id, 
-                                                 {**msg, "timestamp": current_time})
-        
-            return True
+            # Save to database
+            conversation_id = st.session_state.get('current_conversation_id')
+            conversation_id = self.save_message(conversation_id, 
+                                             {**user_message, "timestamp": current_time})
+            self.save_message(conversation_id, 
+                            {**assistant_msg, "timestamp": current_time})
 
         except Exception as e:
             st.error(f"Error processing message: {str(e)}")
-            return False
 
     def save_message(self, conversation_id, message):
-        """Save message and update conversation metadata"""
+        """Save message and update title with summary"""
         current_time = datetime.now(self.tz)
-    
+
         try:
             # For new conversation
             if not conversation_id:
-                conv_ref = db.collection('conversations').document()
-                conversation_id = conv_ref.id
-                conv_ref.set({
+                new_conv_ref = db.collection('conversations').document()
+                conversation_id = new_conv_ref.id
+                new_conv_ref.set({
                     'user_id': st.session_state.user.uid,
                     'created_at': firestore.SERVER_TIMESTAMP,
                     'updated_at': firestore.SERVER_TIMESTAMP,
@@ -244,9 +212,8 @@ class EWA:
                     'status': 'active'
                 })
                 st.session_state.current_conversation_id = conversation_id
-                return conversation_id
         
-            # For existing conversation
+            # Save message
             conv_ref = db.collection('conversations').document(conversation_id)
             conv_ref.collection('messages').add({
                 **message,
@@ -283,7 +250,7 @@ class EWA:
         except Exception as e:
             st.error(f"Error: {str(e)}")
             return conversation_id
-    
+        
     def login(self, email, password):
         """Authenticate user with Firebase Auth REST API"""
         try:
@@ -307,9 +274,8 @@ class EWA:
             st.session_state.user = user
             st.session_state.logged_in = True 
             st.session_state.messages = [{
-                "content": INITIAL_ASSISTANT_MESSAGE["content"],
+                **INITIAL_ASSISTANT_MESSAGE,
                 "timestamp": self.format_time()
-                "role": "assistant"
             }]
             st.session_state.stage = 'initial'
             return True
@@ -339,10 +305,10 @@ def main():
     # Display message history
     if 'messages' in st.session_state:
         for msg in st.session_state.messages:
-            role = msg.get("role", "assistant")  # Default to assistant if role not set
-            formatted_msg = f"{msg.get('timestamp', '')} {msg['content']}"
-            st.chat_message(role).write(formatted_msg)
-            
+            st.chat_message(msg["role"]).write(
+                f"{msg.get('timestamp', '')} {msg['content']}"
+            )
+
     # Chat input
     if prompt := st.chat_input("Type your message here..."):
         app.handle_chat(prompt)
