@@ -31,32 +31,6 @@ class EWA:
         self.tz = pytz.timezone("Europe/London")
         self.conversations_per_page = 10  # Number of conversations per page
 
-        # Add cache properties
-        self._openai_client = None
-        self._system_instructions = None
-        self._review_instructions = None
-
-    @property
-    def openai_client(self):
-        """Lazy initialization of OpenAI client"""
-        if self._openai_client is None:
-            self._openai_client = OpenAI(api_key=st.secrets["default"]["OPENAI_API_KEY"])
-        return self._openai_client
-    
-    @property
-    def system_instructions(self):
-        """Lazy initialization of system instructions"""
-        if self._system_instructions is None:
-            self._system_instructions = {"role": "system", "content": SYSTEM_INSTRUCTIONS}
-        return self._system_instructions
-    
-    @property
-    def review_instructions(self):
-        """Lazy initialization of review instructions"""
-        if self._review_instructions is None:
-            self._review_instructions = {"role": "system", "content": REVIEW_INSTRUCTIONS}
-        return self._review_instructions
-
 
     def format_time(self, dt=None):
         """Format datetime with consistent timezone"""
@@ -145,8 +119,6 @@ class EWA:
         if not prompt:
             return
 
-        # Initialize conversation_id at the start
-        current_conversation_id = st.session_state.get('current_conversation_id')
         current_time = datetime.now(self.tz)
         time_str = self.format_time(current_time)
 
@@ -155,7 +127,7 @@ class EWA:
 
         # Build messages context
         messages = [{"role": "system", "content": SYSTEM_INSTRUCTIONS}]
-    
+        
         # Check for review/scoring related keywords
         review_keywords = ["grade", "score", "review", "assess", "evaluate", "feedback", "rubric"]
         is_review = any(keyword in prompt.lower() for keyword in review_keywords)
@@ -164,64 +136,64 @@ class EWA:
             messages.append({
                 "role": "system",
                 "content": REVIEW_INSTRUCTIONS            
-        })            
-        max_tokens = 5000
-        context_window = 10         
-    else:            
-        max_tokens = 600
-        context_window = 6
+            })            
+            max_tokens = 5000
+            context_window = 10  # Larger context window for review tasks         
+        else:            
+            max_tokens = 600
+            context_window = 6   # Smaller context window for regular chat
 
-    # Add conversation history
-    if 'messages' in st.session_state:
-        recent_messages = st.session_state.messages[-context_window:]
-        if st.session_state.messages and st.session_state.messages[0].get('role') == 'assistant':
-            if recent_messages[0].get('role') != 'assistant':
-                recent_messages = [st.session_state.messages[0]] + recent_messages[-context_window+1:]
-        messages.extend(recent_messages)
 
-    # Add current prompt
-    messages.append({"role": "user", "content": prompt})
+        # Add conversation history
+        if 'messages' in st.session_state:
+            # Keep only the most recent messages within the context window
+            recent_messages = st.session_state.messages[-context_window:]
 
-    try:
-        # Get AI response using cached client
-        if not hasattr(self, '_openai_client'):
-            self._openai_client = OpenAI(api_key=st.secrets["default"]["OPENAI_API_KEY"])
-            
-        response = self._openai_client.chat.completions.create(
-            model="gpt-4-turbo-preview",
-            messages=messages,
-            temperature=0,
-            max_tokens=max_tokens
-        )
+            # Ensure we have the initial assistant message
+            if st.session_state.messages and st.session_state.messages[0].get('role') == 'assistant':
+                if recent_messages[0].get('role') != 'assistant':
+                    recent_messages = [st.session_state.messages[0]] + recent_messages[-context_window+1:]
 
-        assistant_content = response.choices[0].message.content
-        
-        if is_review:
-            assistant_content = f"{assistant_content}\n\n{DISCLAIMER}"
-            
-        st.chat_message("assistant").write(f"{time_str} {assistant_content}")
+            messages.extend(recent_messages)
 
-        # Update session state
-        if 'messages' not in st.session_state:
-            st.session_state.messages = []
-
-        user_message = {"role": "user", "content": prompt, "timestamp": time_str}
-        assistant_msg = {"role": "assistant", "content": assistant_content, "timestamp": time_str}
-        
-        st.session_state.messages.extend([user_message, assistant_msg])
+        # Add current prompt
+        messages.append({"role": "user", "content": prompt})
 
         try:
-            # Save to database
-            current_conversation_id = self.save_message(current_conversation_id, 
-                                                      {**user_message, "timestamp": current_time})
-            if current_conversation_id:
-                self.save_message(current_conversation_id, 
-                                {**assistant_msg, "timestamp": current_time})
-        except Exception as db_error:
-            st.error(f"Error saving to database: {str(db_error)}")
+            # Get AI response
+            response = OpenAI(api_key=st.secrets["default"]["OPENAI_API_KEY"]).chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=0,
+                max_tokens=max_tokens
+            )
 
-    except Exception as e:
-        st.error(f"Error processing message: {str(e)}")
+            assistant_content = response.choices[0].message.content
+            
+            # Add disclaimer for review responses
+            if is_review:
+                assistant_content = f"{assistant_content}\n\n{DISCLAIMER}"
+                
+            st.chat_message("assistant").write(f"{time_str} {assistant_content}")
+
+            # Update session state
+            if 'messages' not in st.session_state:
+                st.session_state.messages = []
+
+            user_message = {"role": "user", "content": prompt, "timestamp": time_str}
+            assistant_msg = {"role": "assistant", "content": assistant_content, "timestamp": time_str}
+            
+            st.session_state.messages.extend([user_message, assistant_msg])
+
+            # Save to database
+            conversation_id = st.session_state.get('current_conversation_id')
+            conversation_id = self.save_message(conversation_id, 
+                                             {**user_message, "timestamp": current_time})
+            self.save_message(conversation_id, 
+                            {**assistant_msg, "timestamp": current_time})
+
+        except Exception as e:
+            st.error(f"Error processing message: {str(e)}")
 
     def save_message(self, conversation_id, message):
         """Save message and update title with summary"""
