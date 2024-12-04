@@ -157,7 +157,7 @@ class EWA:
         # Check for review/scoring related keywords
         review_keywords = ["grade", "score", "review", "assess", "evaluate", "feedback", "rubric"]
         is_review = bool(review_keywords & set(prompt.lower().split()))
-    
+        
         if is_review:            
             messages.append(self.review_instructions)                                 
             max_tokens = 5000
