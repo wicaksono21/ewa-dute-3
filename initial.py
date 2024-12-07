@@ -1,6 +1,6 @@
 INITIAL_ASSISTANT_MESSAGE = {
   "role": "assistant",
-    "content": """Hi there! Ready to start your Part B essay writing? I'm here to guide and help you improve essay writing skills with activities like:
+  "content": """Hi there! Ready to start your Part B essay writing? I'm here to guide and help you improve essay writing skills with activities like:
 
 1. **Topic Selection**
 2. **Outlining**
