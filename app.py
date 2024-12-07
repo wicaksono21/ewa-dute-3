@@ -8,7 +8,7 @@ import requests
 
 # Import configurations
 from initial import INITIAL_ASSISTANT_MESSAGE
-from reviewprocess import SYSTEM_INSTRUCTIONS, REVIEW_INSTRUCTIONS, DISCLAIMER, SCORING_CRITERIA
+from reviewprocess import MODULE_LEARNING_OBJECTIVES, MODULE_SYLLABUS, SYSTEM_INSTRUCTIONS, REVIEW_INSTRUCTIONS, DISCLAIMER, SCORING_CRITERIA
 
 # Initialize Firebase
 if not firebase_admin._apps:
@@ -126,7 +126,11 @@ class EWA:
         st.chat_message("user").write(f"{time_str} {prompt}")
 
         # Build messages context
-        messages = [{"role": "system", "content": SYSTEM_INSTRUCTIONS}]
+        messages = [
+            {"role": "system", "content": SYSTEM_INSTRUCTIONS},
+            {"role": "system", "content": MODULE_SYLLABUS},
+            {"role": "system", "content": MODULE_LEARNING_OBJECTIVES}
+        ]
         
         # Check for review/scoring related keywords
         review_keywords = ["grade", "score", "review", "assess", "evaluate", "feedback", "rubric"]
@@ -171,7 +175,7 @@ class EWA:
             assistant_content = response.choices[0].message.content
             
             # Add disclaimer for review responses
-            if is_review:
+            if is_review and ("Estimated Grade" in assistant_content or "Total Score:" in assistant_content):
                 assistant_content = f"{assistant_content}\n\n{DISCLAIMER}"
                 
             st.chat_message("assistant").write(f"{time_str} {assistant_content}")
